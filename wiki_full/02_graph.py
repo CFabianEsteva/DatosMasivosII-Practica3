@@ -28,7 +28,7 @@ BROADCAST_REDIRECTS = True
 CLEAN_TMP = False
 
 # %% Spark (más particiones de shuffle para el grafo completo)
-spark = get_spark("wiki-full-graph", shuffle_partitions=200)
+spark = get_spark("wiki-full-graph", shuffle_partitions=200, driver_memory="10g")
 
 # %% grafo
 run_build(spark, out_dir=processed(OUT_NAME), min_indegree=MIN_INDEGREE, top_n=TOP_N,

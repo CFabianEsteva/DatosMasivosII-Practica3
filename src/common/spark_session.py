@@ -30,7 +30,8 @@ def get_spark(app_name="practica3", cores=8, driver_memory="8g", shuffle_partiti
         SparkSession.builder.master(f"local[{cores}]")
         .appName(app_name)
         .config("spark.driver.memory", driver_memory)
-        .config("spark.driver.maxResultSize", "2g")
+        .config("spark.driver.maxResultSize", "4g")
+        .config("spark.sql.broadcastTimeout", "1800")   # los broadcast de Wikipedia completa tardan
         .config("spark.local.dir", str(tmp))
         .config("spark.sql.shuffle.partitions", str(shuffle_partitions))
         .config("spark.default.parallelism", str(shuffle_partitions))

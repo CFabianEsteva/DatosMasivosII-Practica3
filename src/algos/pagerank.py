@@ -1,4 +1,4 @@
-"""PageRank en MapReduce sobre PySpark (Leskovec et al., cap. 5.2).
+"""PageRank en MapReduce sobre PySpark.
 
 Una iteración (r = vector de rangos, difundido a las tareas; aristas particionadas por hash del origen):
   Map    : cada tarea recorre sus aristas u -> v y emite r_u / deg(u) hacia v, consolidando localmente

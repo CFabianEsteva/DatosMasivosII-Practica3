@@ -1,9 +1,13 @@
 """Etapa 1 de Wikipedia: enwiki.xml (117 GB) -> parquet con una fila por artículo/redirect.
 
-Cómo se reparte el trabajo (MapReduce nativo de Spark/Hadoop, sin cargar el XML en memoria):
-  - Hadoop `TextInputFormat` con delimitador de registro `</page>`: cada registro es una página
-    completa, y el archivo se parte en bloques de `SPLIT_MB` que se reparten entre los 8 núcleos.
-  - El "map" es `parse_record`: regex sobre el texto de la página (sin parser XML, es mucho más rápido).
+Cómo se reparte el trabajo (MapReduce sin cargar el XML en memoria):
+  - El archivo se parte en bloques de `BLOCK_MB` por rango de bytes, igual que Hadoop parte un
+    archivo en splits: cada página pertenece al bloque donde empieza su etiqueta `<page>`.
+  - Cada bloque es una tarea map de Spark que lee su rango directamente del disco (`iter_pages`),
+    aplica `parse_record` (regex sobre el texto, sin parser XML) y escribe su propio parquet.
+    Antes se usaba `newAPIHadoopFile` con delimitador `</page>`, pero el texto viajaba de la JVM a
+    Python y cada escritura por grupos volvía a recorrer todo el archivo: ~7.6 MB/s. Leyendo los
+    rangos desde Python se aprovechan los 8 núcleos (~30 MB/s por núcleo).
 
 Cómo se aligera desde la ingesta (ver PLAN_DE_TRABAJO.md, "aligerar todo"):
   - Solo se guardan páginas del espacio de nombres 0 (artículos y redirects). Nada de texto.
@@ -11,8 +15,9 @@ Cómo se aligera desde la ingesta (ver PLAN_DE_TRABAJO.md, "aligerar todo"):
     en vez de strings. Así no hace falta un join título->id sobre cientos de millones de enlaces.
   - Los enlaces de cada página se guardan como arreglo de hashes ya deduplicado, sin auto-lazos
     y sin enlaces a otros espacios de nombres (File:, Category:, Template:, ...).
+  - No se cuentan los enlaces dentro de referencias ni de plantillas de cita (`strip_refs`).
 
-Salida (parquet, un directorio por bloque para poder reanudar): <out_dir>/pages/part_NNNN/
+Salida (un parquet por bloque, para poder reanudar si se interrumpe): <out_dir>/pages/blk_NNNNN.parquet
   h BIGINT, page_id BIGINT, title STRING, redirect_h BIGINT (nulo si no es redirect),
   links ARRAY<BIGINT>, cats ARRAY<STRING>
 
@@ -38,8 +43,7 @@ from src.common.paths import ENWIKI_XML, processed
 # ----------------------------------------------------------------------------- parámetros
 MAX_BYTES = 6 * 1024**3   # muestra: ~6 GB del inicio del dump. None = todo el archivo
 OUT_NAME = "wiki_sample"  # data/processed/<OUT_NAME>/pages/
-SPLIT_MB = 256            # tamaño de bloque de lectura (una partición de Spark por bloque)
-CHUNK_PARTS = 24          # bloques por escritura (~6 GB); cada escritura es reanudable
+BLOCK_MB = 64             # tamaño de bloque de lectura: una tarea de Spark (y un parquet) por bloque
 
 # ----------------------------------------------------------------------------- parseo de una página
 RE_TITLE = re.compile(r"<title>(.*?)</title>", re.S)
@@ -49,6 +53,13 @@ RE_REDIRECT = re.compile(r'<redirect title="([^"]*)"')
 RE_TEXT = re.compile(r"<text[^>]*>(.*?)</text>", re.S)
 RE_LINK = re.compile(r"\[\[([^\[\]|\n#]+)")
 RE_CAT = re.compile(r"\[\[\s*category\s*:\s*([^\]|\n]+)", re.I)
+# Referencias y plantillas de cita: sus enlaces apuntan a la fuente (periódico, editorial), no al tema.
+# Sin quitarlas, The New York Times u Oxford University Press quedan arriba de todos los rankings.
+# En el XML el wikitext viene escapado: <ref> aparece como &lt;ref&gt;.
+STRIP_REFS = True
+RE_REF_SELF = re.compile(r"&lt;ref\b(?:(?!&gt;).)*?/&gt;", re.S | re.I)              # <ref name=x />
+RE_REF = re.compile(r"&lt;ref\b(?:(?!&gt;).)*?&gt;.*?&lt;/ref\s*&gt;", re.S | re.I)  # <ref ...>...</ref>
+RE_CITE = re.compile(r"\{\{\s*(?:cite|citation)\b(?:[^{}]|\{\{[^{}]*\}\})*\}\}", re.S | re.I)  # {{cite ...}}
 
 # Prefijos de otros espacios de nombres / proyectos: esos enlaces no son artículos
 NS_PREFIXES = {
@@ -88,6 +99,15 @@ def target_hash(raw):
     return h64(norm_title(t))
 
 
+def strip_refs(text):
+    """Quita referencias (<ref>...</ref>, <ref/>) y plantillas {{cite ...}} del wikitext (~4 % de los enlaces)."""
+    if "&lt;ref" in text:
+        text = RE_REF.sub(" ", RE_REF_SELF.sub(" ", text))
+    if "{{" in text:
+        text = RE_CITE.sub(" ", text)
+    return text
+
+
 def parse_record(rec):
     """Registro (texto hasta `</page>`) -> tupla (h, page_id, title, redirect_h, links, cats) o None."""
     i = rec.find("<page>")
@@ -110,6 +130,8 @@ def parse_record(rec):
 
     m = RE_TEXT.search(rec)
     text = m.group(1) if m else ""
+    if STRIP_REFS:
+        text = strip_refs(text)
     links = set()
     for raw in RE_LINK.findall(text):
         th = target_hash(raw)
@@ -119,65 +141,134 @@ def parse_record(rec):
     return (h, page_id, title, None, sorted(links), sorted(cats))
 
 
-def _parse_partition(records):
-    for _, rec in records:
+# ----------------------------------------------------------------------------- lectura por rangos de bytes
+READ_CHUNK = 32 * 1024**2
+
+
+def iter_pages(path, start, end, chunk=READ_CHUNK):
+    """Registros `<page>...</page>` cuyo `<page>` empieza en el rango de bytes [start, end).
+
+    Es la misma regla que usa Hadoop para partir un archivo de texto en splits: cada registro
+    pertenece al bloque donde empieza, y el último se termina de leer aunque cruce el límite.
+    Dentro del XML los `<` del texto van escapados (`&lt;`), así que `<page>` solo marca páginas.
+    """
+    with open(path, "rb") as f:
+        f.seek(start)
+        base, buf, pos = start, f.read(chunk), 0   # base = posición en el archivo de buf[0]
+        eof = len(buf) < chunk
+        while True:
+            i = buf.find(b"<page>", pos)
+            if i < 0:
+                if eof or base + len(buf) >= end + 6:
+                    return
+                keep = max(pos, len(buf) - 6)       # por si `<page>` quedó partido entre lecturas
+                base, buf, pos = base + keep, buf[keep:], 0
+                more = f.read(chunk)
+                eof = len(more) < chunk
+                buf += more
+                continue
+            if base + i >= end:
+                return
+            j = buf.find(b"</page>", i)
+            if j < 0:
+                if eof:
+                    return
+                base, buf, pos = base + i, buf[i:], 0
+                more = f.read(chunk)
+                eof = len(more) < chunk
+                buf += more
+                continue
+            yield buf[i:j].decode("utf-8", errors="replace")
+            pos = j + 7
+
+
+def _arrow_schema():
+    import pyarrow as pa
+    return pa.schema([
+        pa.field("h", pa.int64(), False),
+        pa.field("page_id", pa.int64(), False),
+        pa.field("title", pa.string(), False),
+        pa.field("redirect_h", pa.int64(), True),
+        pa.field("links", pa.list_(pa.int64()), False),
+        pa.field("cats", pa.list_(pa.string()), False),
+    ])
+
+
+def process_block(task):
+    """Tarea map: (índice, inicio, fin, xml, carpeta) -> escribe pages/blk_NNNNN.parquet y devuelve conteos.
+
+    El archivo se escribe con nombre temporal y se renombra al final (operación atómica): si la
+    corrida se interrumpe, solo quedan bloques completos y al reanudar se omiten.
+    """
+    import os
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    idx, start, end, xml, pages_dir = task
+    t0 = time.time()
+    cols = {k: [] for k in ("h", "page_id", "title", "redirect_h", "links", "cats")}
+    n_pages = n_links = 0
+    for rec in iter_pages(xml, start, end):
+        n_pages += 1
         row = parse_record(rec)
-        if row is not None:
-            yield row
+        if row is None:
+            continue
+        for k, v in zip(cols, row):
+            cols[k].append(v)
+        n_links += len(row[4])
+    table = pa.table(cols, schema=_arrow_schema())
+    final = os.path.join(pages_dir, f"blk_{idx:05d}.parquet")
+    tmp = os.path.join(pages_dir, f".blk_{idx:05d}.parquet.tmp")
+    pq.write_table(table, tmp, compression="zstd")
+    os.replace(tmp, final)
+    return {"bloque": idx, "paginas": n_pages, "filas": table.num_rows,
+            "redirects": int(table.num_rows - table.column("redirect_h").null_count),
+            "enlaces": n_links,
+            "segundos": round(time.time() - t0, 1)}
+
+
+def block_files(pages_dir):
+    """Bloques terminados de una carpeta pages/: formato nuevo (blk_*.parquet) y viejo (part_*/ con _SUCCESS)."""
+    pages_dir = Path(pages_dir)
+    files = sorted(str(p) for p in pages_dir.glob("blk_*.parquet"))
+    files += sorted(str(p) for p in pages_dir.glob("part_*") if (p / "_SUCCESS").exists())
+    return files
 
 
 # ----------------------------------------------------------------------------- Spark
-def run_ingest(spark, xml_path=ENWIKI_XML, out_dir=None, max_bytes=MAX_BYTES, split_mb=SPLIT_MB,
-               chunk_parts=CHUNK_PARTS, resume=True):
-    from pyspark.sql.types import (ArrayType, LongType, StringType, StructField, StructType)
+def run_ingest(spark, xml_path=ENWIKI_XML, out_dir=None, max_bytes=MAX_BYTES, block_mb=BLOCK_MB, resume=True):
+    """Map sobre rangos de bytes del XML: una tarea de Spark por bloque de `block_mb`.
 
-    schema = StructType([
-        StructField("h", LongType(), False),
-        StructField("page_id", LongType(), False),
-        StructField("title", StringType(), False),
-        StructField("redirect_h", LongType(), True),
-        StructField("links", ArrayType(LongType()), False),
-        StructField("cats", ArrayType(StringType()), False),
-    ])
+    Cada tarea abre el archivo, salta a su rango y parsea sus páginas en Python puro (sin pasar el
+    texto por la JVM), y escribe su propio parquet. Es un solo trabajo de Spark que lee el archivo
+    una vez; la reanudación es por bloque (los que ya tienen su parquet se omiten).
+    """
+    import json
+
     out = Path(out_dir) if out_dir else processed(OUT_NAME)
     pages_dir = out / "pages"
     pages_dir.mkdir(parents=True, exist_ok=True)
-
-    sc = spark.sparkContext
-    split = split_mb * 1024 * 1024
-    conf = {
-        "textinputformat.record.delimiter": "</page>",
-        # minsize = maxsize para que el bloque sea de SPLIT_MB (el sistema de archivos local usa 32 MB)
-        "mapreduce.input.fileinputformat.split.maxsize": str(split),
-        "mapreduce.input.fileinputformat.split.minsize": str(split),
-    }
-    rdd = sc.newAPIHadoopFile(
-        "file://" + str(Path(xml_path).resolve()),
-        "org.apache.hadoop.mapreduce.lib.input.TextInputFormat",
-        "org.apache.hadoop.io.LongWritable",
-        "org.apache.hadoop.io.Text",
-        conf=conf,
-    )
-    n_total = rdd.getNumPartitions()
-    n_use = n_total if max_bytes is None else min(n_total, math.ceil(max_bytes / split))
-    print(f"[ingest] bloques totales={n_total}, a procesar={n_use} "
-          f"(~{n_use * split_mb / 1024:.1f} GB), de {chunk_parts} en {chunk_parts}")
-
-    t_start = time.time()
-    for ci, a in enumerate(range(0, n_use, chunk_parts)):
-        b = min(a + chunk_parts, n_use)
-        target = pages_dir / f"part_{ci:04d}"
-        if resume and (target / "_SUCCESS").exists():
-            print(f"[ingest] bloques {a}-{b - 1}: ya procesados, se omiten")
-            continue
-        t0 = time.time()
-        # Las particiones fuera de [a, b) devuelven un iterador vacío sin leerse (no cuestan I/O)
-        sel = rdd.mapPartitionsWithIndex(
-            lambda i, it, a=a, b=b: _parse_partition(it) if a <= i < b else iter(())
-        )
-        spark.createDataFrame(sel, schema, verifySchema=False).write.mode("overwrite").parquet(str(target))
-        print(f"[ingest] bloques {a}-{b - 1} listos en {time.time() - t0:.0f}s "
-              f"(acumulado {(time.time() - t_start) / 60:.1f} min)")
+    xml = str(Path(xml_path).resolve())
+    size = Path(xml).stat().st_size
+    limit = size if max_bytes is None else min(size, max_bytes)
+    block = block_mb * 1024**2
+    n_blocks = math.ceil(limit / block)
+    tasks = [(i, i * block, min((i + 1) * block, limit), xml, str(pages_dir)) for i in range(n_blocks)]
+    todo = [t for t in tasks if not (resume and (pages_dir / f"blk_{t[0]:05d}.parquet").exists())]
+    print(f"[ingest] {limit / 1024**3:.1f} GB en {n_blocks} bloques de {block_mb} MB; "
+          f"pendientes {len(todo)} (ya hechos {n_blocks - len(todo)})", flush=True)
+    if not todo:
+        return out
+    t0 = time.time()
+    stats = spark.sparkContext.parallelize(todo, len(todo)).map(process_block).collect()
+    secs = time.time() - t0
+    gb = sum(t[2] - t[1] for t in todo) / 1024**3
+    print(f"[ingest] {len(todo)} bloques ({gb:.1f} GB) en {secs / 60:.1f} min "
+          f"({gb * 1024 / secs:.0f} MB/s)", flush=True)
+    log = out / "ingest_log.jsonl"
+    with open(log, "a") as fh:
+        for st in stats:
+            fh.write(json.dumps(st) + "\n")
     return out
 
 
@@ -185,7 +276,7 @@ if __name__ == "__main__":
     # %%
     from src.common.spark_session import get_spark
     # Se importa el módulo (en vez de usar las funciones de __main__) para que los workers de Spark
-    # puedan deserializar `parse_record` y `target_hash` por referencia.
+    # puedan deserializar `process_block`, `parse_record` y `target_hash` por referencia.
     from src.ingest.parse_wiki import run_ingest as run_ingest_module
 
     spark = get_spark("wiki-ingest", shuffle_partitions=64)

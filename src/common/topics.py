@@ -67,9 +67,15 @@ def hepph_topic(year):
     return None
 
 
-def compile_topics(topics):
-    """{topic: [kw, ...]} -> {topic: regex}, para evaluar muchos textos rápido."""
-    return {t: re.compile("|".join(re.escape(k) for k in kws)) for t, kws in topics.items()}
+def compile_topics(topics, word_start=False):
+    """{topic: [kw, ...]} -> {topic: regex}, para evaluar muchos textos rápido.
+
+    word_start=True exige que la palabra clave empiece una palabra (`\\b`): en las categorías de
+    Wikipedia evita falsos positivos como "sport" dentro de "transport" o "nfl" dentro de "conflicts".
+    En los géneros de Spotify se deja la subcadena ("synthpop" debe contar como pop).
+    """
+    pre = r"\b" if word_start else ""
+    return {t: re.compile(pre + "(?:" + "|".join(re.escape(k) for k in kws) + ")") for t, kws in topics.items()}
 
 
 def match_topics(texts, compiled):

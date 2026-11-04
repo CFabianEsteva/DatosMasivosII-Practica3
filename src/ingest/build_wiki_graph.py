@@ -1,6 +1,6 @@
 """Etapa 2 de Wikipedia: parquet de páginas -> grafo podado con ids densos (edges, nodes, seeds).
 
-Entrada : <data/processed/NAME>/pages/part_*/   (salida de parse_wiki.py)
+Entrada : <data/processed/NAME>/pages/blk_*.parquet   (salida de parse_wiki.py)
 Salidas : <data/processed/NAME>/edges.parquet   (src, dst) ids enteros densos 0..N-1
           <data/processed/NAME>/nodes.parquet   (id, h, page_id, title, cats)
           <data/processed/NAME>/seeds.parquet   (node, topic)  semillas del PageRank sensible a tópico
@@ -29,6 +29,7 @@ except NameError:
 
 from src.common.paths import processed
 from src.common.topics import WIKI_TOPICS, compile_topics, match_topics
+from src.ingest.parse_wiki import block_files
 
 # ----------------------------------------------------------------------------- parámetros
 OUT_NAME = "wiki_sample"
@@ -54,7 +55,7 @@ def run_build(spark, out_dir=None, min_indegree=MIN_INDEGREE, max_prune_iter=MAX
     out = Path(out_dir) if out_dir else processed(OUT_NAME)
     tmp = out / "graph_tmp"
     tmp.mkdir(parents=True, exist_ok=True)
-    parts = [str(p) for p in sorted((out / "pages").glob("part_*")) if (p / "_SUCCESS").exists()]
+    parts = block_files(out / "pages")
     if not parts:
         raise FileNotFoundError(f"No hay bloques terminados en {out / 'pages'}: corre primero parse_wiki.py")
     stats = {"parametros": dict(min_indegree=min_indegree, top_n=top_n, drop_lists=drop_lists,
@@ -138,7 +139,7 @@ def run_build(spark, out_dir=None, min_indegree=MIN_INDEGREE, max_prune_iter=MAX
              .select(F.col("s").alias("src"), F.col("d").alias("dst")))
     dense.write.mode("overwrite").parquet(str(out / "edges.parquet"))
 
-    compiled = compile_topics(WIKI_TOPICS)
+    compiled = compile_topics(WIKI_TOPICS, word_start=True)
     seeds_rdd = nodes.select("id", "cats").rdd.mapPartitions(lambda it: _seed_rows(it, compiled))
     seeds = spark.createDataFrame(seeds_rdd, "node long, topic string")
     seeds.write.mode("overwrite").parquet(str(out / "seeds.parquet"))

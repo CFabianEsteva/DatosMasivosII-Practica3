@@ -1,8 +1,8 @@
-"""HITS (hubs y autoridades) en MapReduce sobre PySpark (Leskovec et al., cap. 5.5).
+"""HITS (hubs y autoridades) en MapReduce sobre PySpark.
 
 Cada ronda son dos pasos MapReduce sobre las aristas particionadas por hash del origen:
-  autoridad a_v = suma de h_u sobre los u con u -> v      (propagate hacia adelante)
-  hub       h_u = suma de a_v sobre los v con u -> v      (propagate hacia atrás)
+  autoridad a_v = suma de h_u sobre los u con u -> v (propagate hacia adelante)
+  hub       h_u = suma de a_v sobre los v con u -> v (propagate hacia atrás)
 Después de cada paso se normaliza en L2 (reducción global sobre el vector).
 """
 import time

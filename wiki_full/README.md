@@ -12,6 +12,7 @@ desde VS Code, en orden, con el entorno conda ya creado (`pip install -r ../requ
 Antes de lanzarlos, desarrolla y valida todo con la muestra (`src/ingest/parse_wiki.py` y
 `build_wiki_graph.py` con `OUT_NAME = "wiki_sample"`) y mide cuánto tarda.
 
-- El paso 1 es reanudable: si se interrumpe, se vuelve a correr y omite los bloques terminados.
+- El paso 1 es reanudable: escribe un parquet por bloque de 64 MB; si se interrumpe, se vuelve a correr y
+  omite los bloques terminados. Tarda ~30 min (~64 MB/s con 8 núcleos).
 - Mientras corre, deja la computadora despierta (sin suspender) y el script abierto.
 - Hay ideas para aligerar el paso 2 en el encabezado de `02_graph.py`.

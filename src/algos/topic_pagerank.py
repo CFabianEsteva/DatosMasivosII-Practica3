@@ -1,4 +1,4 @@
-"""PageRank Sensible a Tópico (Haveliwala, 2002; Leskovec et al., cap. 5.3) en MapReduce.
+"""PageRank Sensible a Tópico en MapReduce.
 
 Para cada tópico t con conjunto semilla S_t, el teletransporte salta solo a S_t:
     r_t = beta * M r_t + (1 - beta) * e_{S_t} / |S_t|

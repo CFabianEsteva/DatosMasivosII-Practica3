@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-try:  # permite correr este archivo directo desde VS Code (Run Python File o celdas `# %%`)
+try:  
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 except NameError:
     sys.path.insert(0, str(Path.cwd()))
@@ -25,12 +25,12 @@ from src.algos.topic_pagerank import build_teleport, topic_pagerank
 from src.common.graph_io import Graph
 from src.common.paths import processed, results
 
-# ----------------------------------------------------------------------------- parámetros
-BETA = 0.85          # factor de amortiguamiento (fijo; no se barre)
+#  parámetros
+BETA = 0.85          # factor de amortiguamiento 
 TOL = 1e-8
 MAX_ITER = 100
 RUN = ["hepph", "spotify"]   # "wiki_sample" y "wiki_full" se agregan cuando estén listos
-PARTITIONS = {"hepph": 8, "spotify": 8, "wiki_sample": 32, "wiki_full": 64}
+PARTITIONS = {"hepph": 8, "spotify": 8, "wiki_sample": 32, "wiki_full": 32}
 TOPIC_BATCH = {"wiki_full": 3}   # tópicos por grupo cuando N*T no cabe en memoria (None = todos juntos)
 
 
@@ -47,17 +47,17 @@ def run_dataset(spark, name, beta=BETA, tol=TOL, max_iter=MAX_ITER, partitions=N
     print(f"[{name}] nodos={info['nodos']:,} aristas={info['aristas']:,} sin_salida={info['nodos_sin_salida']:,}",
           flush=True)
 
-    # --- PageRank
+    # PageRank
     t = time.time()
     pr, pr_hist = pagerank(graph, beta=beta, tol=tol, max_iter=max_iter)
     info["pagerank"] = {"iteraciones": len(pr_hist), "segundos": round(time.time() - t, 1), "historia": pr_hist}
 
-    # --- HITS
+    # HITS
     t = time.time()
     auth, hub, hits_hist = hits(graph, tol=tol, max_iter=max_iter)
     info["hits"] = {"iteraciones": len(hits_hist), "segundos": round(time.time() - t, 1), "historia": hits_hist}
 
-    # --- PageRank sensible a tópico
+    # PageRank sensible a tópico
     seeds = pd.read_parquet(src_dir / "seeds.parquet")
     tele, topics_used = build_teleport(graph.N, seeds)
     t = time.time()
@@ -66,7 +66,7 @@ def run_dataset(spark, name, beta=BETA, tol=TOL, max_iter=MAX_ITER, partitions=N
     info["tspr"] = {"topicos": topics_used, "iteraciones": len(ts_hist),
                     "segundos": round(time.time() - t, 1), "historia": ts_hist}
 
-    # --- Un solo parquet con todos los vectores
+    # Un solo parquet con todos los vectores
     df = pd.DataFrame({"id": np.arange(graph.N), "pagerank": pr, "authority": auth, "hub": hub})
     for j, tp in enumerate(topics_used):
         df["tspr_" + re.sub(r"\W", "_", tp)] = ts[:, j]

@@ -1,4 +1,4 @@
-"""Métricas pequeñas para comparar vectores de rango (se usan en baselines y en el notebook)."""
+"""Métricas pequeñas para comparar vectores de rango."""
 import numpy as np
 
 

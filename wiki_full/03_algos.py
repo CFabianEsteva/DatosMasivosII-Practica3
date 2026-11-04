@@ -16,11 +16,11 @@ from src.common.spark_session import get_spark
 
 # %% parámetros
 NAME = "wiki_full"
-PARTITIONS = 128
+PARTITIONS = 32   # pocas particiones: cada tarea devuelve un vector de N sumas, más particiones = más tráfico
 BETA = 0.85
 
 # %% Spark
-spark = get_spark("wiki-full-algos", shuffle_partitions=PARTITIONS)
+spark = get_spark("wiki-full-algos", shuffle_partitions=PARTITIONS, driver_memory="10g")
 
 # %% algoritmos
 run_dataset(spark, NAME, beta=BETA, partitions=PARTITIONS)
