@@ -1,13 +1,8 @@
 """Wikipedia COMPLETA, paso 1: enwiki.xml (117 GB) -> data/processed/wiki_full/pages/.
 
-Corre desde VS Code (Run Python File, o celda por celda con `# %%`). Es el mismo código que la
-muestra (src/ingest/parse_wiki.py) pero sin límite de bytes.
-
 - Una tarea de Spark por bloque de 64 MB (1 756 bloques); cada una escribe su propio
   data/processed/wiki_full/pages/blk_NNNNN.parquet. Si se interrumpe, vuelve a correr este archivo:
   los bloques que ya tienen su parquet se omiten (RESUME = True).
-- Medido: ~64 MB/s con 8 núcleos -> ~30 min para los 110 GB (antes, con newAPIHadoopFile, 7.6 MB/s).
-- Deja la computadora despierta (sin suspender) mientras corre.
 """
 import sys
 from pathlib import Path

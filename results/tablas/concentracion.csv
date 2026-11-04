@@ -1,0 +1,5 @@
+dataset,nodos,autoridad > 1e-6 (fracción),masa L2 en el top 1 %,masa PageRank en el top 1 %
+hepph,34546,0.743,0.917,0.196
+spotify,156320,0.667,0.966,0.226
+wiki_sample,153242,0.951,0.996,0.202
+wiki_full,1516230,0.996,0.983,0.279

@@ -1,0 +1,60 @@
+{
+  "parametros": {
+    "min_indegree": 3,
+    "top_n": null,
+    "drop_lists": true,
+    "drop_disambig": true
+  },
+  "bloques_leidos": 1,
+  "poda": [
+    {
+      "iter": 1,
+      "aristas": 7127948
+    },
+    {
+      "iter": 2,
+      "aristas": 7026162
+    },
+    {
+      "iter": 3,
+      "aristas": 7010033
+    },
+    {
+      "iter": 4,
+      "aristas": 7006980
+    },
+    {
+      "iter": 5,
+      "aristas": 7006109
+    },
+    {
+      "iter": 6,
+      "aristas": 7005844
+    },
+    {
+      "iter": 7,
+      "aristas": 7005581
+    },
+    {
+      "iter": 8,
+      "aristas": 7005474
+    }
+  ],
+  "articulos": 212209,
+  "redirects": 119207,
+  "aristas_resueltas": 7739565,
+  "nodos_finales": 153532,
+  "aristas_finales": 7005474,
+  "semillas_por_topico": {
+    "geografia": 37088,
+    "tecnologia": 9372,
+    "religion": 13423,
+    "ciencia": 10739,
+    "historia": 26283,
+    "deportes": 9930,
+    "negocios": 8096,
+    "salud": 6246,
+    "politica": 14943,
+    "arte_cultura": 26762
+  }
+}

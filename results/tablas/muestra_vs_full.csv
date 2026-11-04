@@ -1,0 +1,7 @@
+ranking,k,solapamiento
+pagerank,20,0.4
+pagerank,100,0.56
+authority,20,0.5
+authority,100,0.47
+hub,20,0.1
+hub,100,0.13

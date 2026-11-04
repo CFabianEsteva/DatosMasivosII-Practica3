@@ -1,6 +1,6 @@
 """Wikipedia COMPLETA, paso 3: PageRank, HITS y PageRank sensible a tópico sobre wiki_full.
 
-Salida: results/wiki_full/ranks.parquet y run_info.json (el notebook los usa igual que la muestra).
+Salida: results/wiki_full/ranks.parquet y run_info.json.
 Si la memoria no alcanza, baja PARTITIONS o sube MIN_INDEGREE en 02_graph.py.
 """
 import sys

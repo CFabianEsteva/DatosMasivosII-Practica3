@@ -1,12 +1,4 @@
 """Wikipedia COMPLETA, paso 2: pages/ -> grafo podado (edges, nodes, seeds) en data/processed/wiki_full/.
-
-Igual que la muestra (src/ingest/build_wiki_graph.py) pero con umbrales para el dump completo.
-Es el paso más pesado en memoria: ajusta MIN_INDEGREE / TOP_N si se queda sin RAM o disco.
-Ideas para aligerar (en orden):
-  1. Subir MIN_INDEGREE (p. ej. 10 -> 20): cada vez quedan menos nodos y aristas.
-  2. TOP_N = 1_500_000: se queda con los artículos más enlazados.
-  3. BROADCAST_REDIRECTS = False si el broadcast de redirects da error de memoria.
-Al terminar se puede borrar data/processed/wiki_full/graph_tmp/ (CLEAN_TMP = True).
 """
 import sys
 from pathlib import Path
